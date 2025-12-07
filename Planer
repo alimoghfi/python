@@ -1,0 +1,1509 @@
+import sys
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QLabel, QTableWidget, QTableWidgetItem, QPushButton, QLineEdit, QComboBox,
+    QCheckBox, QGroupBox, QTextEdit, QMessageBox,
+    QTabWidget, QHeaderView, QDialog, QProgressBar, QAbstractItemView
+)
+from PyQt6.QtCore import Qt, QTimer, QTime, pyqtSignal, QRectF
+from PyQt6.QtGui import (
+    QFont, QColor, QPalette, QValidator, QPainter, QPen, QBrush, QLinearGradient
+)
+import pyqtgraph as pg
+from jdatetime import date as jdate
+
+# -------------------------- تقویم جلالی -------------------------- #
+class JalaliCalendar(QWidget):
+    selectedDateChanged = pyqtSignal(jdate)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+
+        self.today = jdate.today()
+        self.current_date = self.today
+        self.display_year = self.today.year
+        self.display_month = self.today.month
+
+        self.task_dates = {}  # {jdate: count}
+
+        self.month_names = [
+            "فروردین", "اردیبهشت", "خرداد",
+            "تیر", "مرداد", "شهریور",
+            "مهر", "آبان", "آذر",
+            "دی", "بهمن", "اسفند"
+        ]
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(8, 8, 8, 8)
+        main_layout.setSpacing(6)
+
+        # هدر
+        header_layout = QHBoxLayout()
+        header_layout.setSpacing(6)
+
+        self.next_btn = QPushButton("›")
+        self.prev_btn = QPushButton("‹")
+        self.today_btn = QPushButton("امروز")
+
+        for btn in (self.prev_btn, self.next_btn, self.today_btn):
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        self.header_label = QLabel()
+        self.header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        header_layout.addWidget(self.prev_btn)
+        header_layout.addWidget(self.header_label, 1)
+        header_layout.addWidget(self.next_btn)
+        header_layout.addWidget(self.today_btn)
+
+        main_layout.addLayout(header_layout)
+
+        # جدول روزها
+        self.table = QTableWidget(7, 7)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
+        self.table.horizontalHeader().setVisible(False)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setShowGrid(True)
+
+        for c in range(7):
+            self.table.setColumnWidth(c, 38)
+        for r in range(7):
+            self.table.setRowHeight(r, 32)
+
+        main_layout.addWidget(self.table)
+
+        self.apply_styles()
+
+        # روزهای هفته
+        days = ["ش", "ی", "د", "س", "چ", "پ", "ج"]
+        for col, d in enumerate(days):
+            item = QTableWidgetItem(d)
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            item.setForeground(QColor("#FFFFFF"))
+            item.setBackground(QColor("#1F6FEB"))
+            bold_font = QFont(self.font())
+            bold_font.setBold(True)
+            item.setFont(bold_font)
+            self.table.setItem(0, col, item)
+
+        # سیگنال‌ها
+        self.prev_btn.clicked.connect(self.prev_month)
+        self.next_btn.clicked.connect(self.next_month)
+        self.today_btn.clicked.connect(self.go_to_today)
+        self.table.itemClicked.connect(self.handle_click)
+
+        self.update_calendar()
+
+    def apply_styles(self):
+        self.header_label.setStyleSheet("""
+            QLabel {
+                background: rgba(15, 23, 42, 0.4);
+                color: #38BDF8;
+                font-size: 15px;
+                font-weight: 600;
+                padding: 6px 10px;
+                border-radius: 12px;
+            }
+        """)
+        btn_style = """
+            QPushButton {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #38BDF8,
+                    stop:1 #0EA5E9
+                );
+                color: white;
+                border-radius: 8px;
+                padding: 4px 10px;
+                font-weight: bold;
+                border: none;
+            }
+            QPushButton:hover {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #0EA5E9,
+                    stop:1 #06B6D4
+                );
+            }
+        """
+        self.prev_btn.setStyleSheet(btn_style)
+        self.next_btn.setStyleSheet(btn_style)
+        self.today_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(15, 23, 42, 0.7);
+                color: #E5E7EB;
+                border-radius: 8px;
+                padding: 4px 12px;
+                border: 1px solid rgba(148, 163, 184, 0.6);
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background: rgba(30, 64, 175, 0.8);
+            }
+        """)
+
+        self.table.setStyleSheet("""
+            QTableWidget {
+                background: rgba(15, 23, 42, 0.7);
+                gridline-color: rgba(31, 41, 55, 0.8);
+                color: #E5E7EB;
+                border-radius: 16px;
+            }
+            QTableWidget::item {
+                padding: 4px;
+            }
+            QTableWidget::item:selected {
+                background: #38BDF8;
+                color: #020617;
+                font-weight: bold;
+            }
+            QTableWidget::item:hover {
+                background: rgba(56, 189, 248, 0.3);
+            }
+        """)
+
+    # API بیرونی
+    def setDate(self, jd: jdate):
+        self.current_date = jd
+        self.display_year = jd.year
+        self.display_month = jd.month
+        self.update_calendar()
+
+    def selectedDate(self) -> jdate:
+        return self.current_date
+
+    def setTaskDates(self, date_map: dict):
+        self.task_dates = date_map or {}
+        self.update_calendar()
+
+    # ناوبری
+    def prev_month(self):
+        m = self.display_month - 1
+        y = self.display_year
+        if m == 0:
+            m = 12
+            y -= 1
+        self.display_month = m
+        self.display_year = y
+        self.update_calendar()
+
+    def next_month(self):
+        m = self.display_month + 1
+        y = self.display_year
+        if m == 13:
+            m = 1
+            y += 1
+        self.display_month = m
+        self.display_year = y
+        self.update_calendar()
+
+    def go_to_today(self):
+        self.setDate(self.today)
+        self.selectedDateChanged.emit(self.today)
+
+    # رندر تقویم
+    def update_calendar(self):
+        year = self.display_year
+        month = self.display_month
+
+        self.header_label.setText(f"{self.month_names[month - 1]}  {year}")
+
+        for row in range(1, 7):
+            for col in range(7):
+                self.table.setItem(row, col, QTableWidgetItem(""))
+
+        first_day = jdate(year, month, 1)
+        weekday = first_day.weekday()  # 0 = شنبه
+        if month == 12:
+            next_first = jdate(year + 1, 1, 1)
+        else:
+            next_first = jdate(year, month + 1, 1)
+        days_in_month = (next_first - first_day).days
+
+        if month == 1:
+            prev_month = 12
+            prev_year = year - 1
+        else:
+            prev_month = month - 1
+            prev_year = year
+        prev_first = jdate(prev_year, prev_month, 1)
+        if prev_month == 12:
+            prev_next_first = jdate(prev_year + 1, 1, 1)
+        else:
+            prev_next_first = jdate(prev_year, prev_month + 1, 1)
+        days_in_prev = (prev_next_first - prev_first).days
+
+        # ماه قبل
+        day = days_in_prev - weekday + 1
+        row = 1
+        for col in range(weekday):
+            jd = jdate(prev_year, prev_month, day)
+            item = self._make_day_item(jd, True)
+            self.table.setItem(row, col, item)
+            day += 1
+
+        # ماه جاری
+        day = 1
+        col = weekday
+        while day <= days_in_month:
+            jd = jdate(year, month, day)
+            item = self._make_day_item(jd, False)
+            self.table.setItem(row, col, item)
+            col += 1
+            if col == 7:
+                col = 0
+                row += 1
+            day += 1
+
+        # ماه بعد
+        next_year = year + (month == 12)
+        next_month = 1 if month == 12 else month + 1
+        day = 1
+        while row <= 6:
+            jd = jdate(next_year, next_month, day)
+            item = self._make_day_item(jd, True)
+            self.table.setItem(row, col, item)
+            col += 1
+            if col == 7:
+                col = 0
+                row += 1
+            day += 1
+
+    def _make_day_item(self, jd: jdate, from_other_month: bool) -> QTableWidgetItem:
+        count = self.task_dates.get(jd, 0)
+        text = str(jd.day)
+        if count > 0:
+            text += " ●"
+        item = QTableWidgetItem(text)
+        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        item.setData(Qt.ItemDataRole.UserRole, jd)
+
+        if from_other_month:
+            item.setForeground(QColor("#6B7280"))
+        else:
+            item.setForeground(QColor("#F9FAFB"))
+
+        if jd == self.today:
+            item.setBackground(QColor(30, 64, 175))
+
+        if count > 0:
+            item.setBackground(QColor(15, 23, 42))
+            item.setToolTip(f"{count} تکلیف در این روز")
+
+        if jd == self.current_date:
+            item.setBackground(QColor("#38BDF8"))
+            item.setForeground(QColor("#020617"))
+            bold_font = QFont(self.font())
+            bold_font.setBold(True)
+            item.setFont(bold_font)
+
+        return item
+
+    def handle_click(self, item: QTableWidgetItem):
+        if not item or item.row() == 0:
+            return
+        jd = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(jd, jdate):
+            return
+        self.current_date = jd
+        self.display_year = jd.year
+        self.display_month = jd.month
+        self.update_calendar()
+        self.selectedDateChanged.emit(jd)
+
+
+# -------------------------- اعتبارسنج تاریخ -------------------------- #
+class JalaliDateValidator(QValidator):
+    def validate(self, input_text, pos):
+        if not input_text:
+            return (QValidator.State.Acceptable, input_text, pos)
+
+        parts = input_text.split('/')
+        if len(parts) > 3:
+            return (QValidator.State.Invalid, input_text, pos)
+
+        try:
+            if len(parts) >= 1 and parts[0].strip():
+                year = int(parts[0])
+                if year < 0:
+                    return (QValidator.State.Invalid, input_text, pos)
+            if len(parts) >= 2 and parts[1].strip():
+                month = int(parts[1])
+                if not (1 <= month <= 12):
+                    return (QValidator.State.Invalid, input_text, pos)
+            if len(parts) == 3 and parts[2].strip():
+                day = int(parts[2])
+                if not (1 <= day <= 31):
+                    return (QValidator.State.Invalid, input_text, pos)
+                jdate(year, month, day)
+            return (QValidator.State.Acceptable, input_text, pos)
+        except ValueError:
+            return (QValidator.State.Invalid, input_text, pos)
+
+
+class JalaliDateEdit(QWidget):
+    dateChanged = pyqtSignal(jdate)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self._line = QLineEdit()
+        self._line.setInputMask("0000/00/00;_")
+        validator = JalaliDateValidator()
+        self._line.setValidator(validator)
+
+        self._btn = QPushButton("📅")
+        self._btn.setFixedWidth(32)
+        self._btn.clicked.connect(self.open_calendar)
+
+        layout.addWidget(self._line)
+        layout.addWidget(self._btn)
+
+        self._current_date = jdate.today()
+        self.updateText()
+        self._line.editingFinished.connect(self.parseText)
+
+    def setJDate(self, jd: jdate):
+        self._current_date = jd
+        self.updateText()
+        self.dateChanged.emit(jd)
+
+    def date(self) -> jdate:
+        return self._current_date
+
+    def updateText(self):
+        jd = self._current_date
+        self._line.setText(f"{jd.year:04d}/{jd.month:02d}/{jd.day:02d}")
+
+    def parseText(self):
+        text = self._line.text().strip()
+        if not text or "__" in text:
+            self.updateText()
+            return
+        try:
+            y, m, d = map(int, text.split('/'))
+            jd = jdate(y, m, d)
+            self.setJDate(jd)
+        except Exception:
+            self.updateText()
+
+    def open_calendar(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("انتخاب تاریخ")
+        v = QVBoxLayout(dlg)
+        cal = JalaliCalendar(dlg)
+        cal.setDate(self._current_date)
+        v.addWidget(cal)
+
+        def on_selected(jd: jdate):
+            self.setJDate(jd)
+            dlg.accept()
+
+        cal.selectedDateChanged.connect(on_selected)
+        dlg.exec()
+
+
+# -------------------------- دایره پیشرفت -------------------------- #
+class CircularProgress(QWidget):
+    def __init__(self, label: str, color: QColor, parent=None):
+        super().__init__(parent)
+        self._value = 0
+        self._label = label
+        self._color = color
+
+        # فضای کافی برای دایره + متن
+        self.setMinimumSize(220, 220)
+
+    def setValue(self, v: int):
+        self._value = max(0, min(100, int(v)))
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        W = self.width()
+        H = self.height()
+
+        diameter = min(W, H) - 80
+        x = (W - diameter) / 2
+        y = 10
+        rect = QRectF(x, y, diameter, diameter)
+
+        # حلقه پس‌زمینه
+        pen_bg = QPen(QColor(56, 189, 248, 50), 12)
+        pen_bg.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen_bg)
+        painter.drawArc(rect, 0, 360 * 16)
+
+        # حلقه فعال
+        pen_fg = QPen(self._color, 12)
+        pen_fg.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen_fg)
+        span = int(360 * 16 * (self._value / 100))
+        painter.drawArc(rect, -90 * 16, -span)
+
+        # درصد وسط
+        painter.setPen(QColor("#FFFFFF"))
+        font = QFont(self.font())
+        font.setPointSize(16)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, f"{self._value}%")
+
+        # عنوان زیر دایره
+        label_rect = QRectF(0, rect.bottom() + 20, W, 50)
+        painter.setPen(QColor("#38BDF8"))
+        font2 = QFont(self.font())
+        font2.setPointSize(14)
+        font2.setBold(True)
+        painter.setFont(font2)
+        painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, self._label)
+
+
+# -------------------------- مدل تکلیف -------------------------- #
+class Task:
+    def __init__(self, subject, title, difficulty, progress, due_date, completed=False):
+        self.subject = subject
+        self.title = title
+        self.difficulty = difficulty
+        self.progress = progress
+        self.due_date = due_date
+        self.completed = completed
+
+
+# -------------------------- دیالوگ دستیار -------------------------- #
+class AssistantDialog(QDialog):
+    def __init__(self, fatigue, tasks, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("دستیار مطالعه 🤖")
+        self.setModal(True)
+        self.setMinimumWidth(420)
+
+        layout = QVBoxLayout(self)
+        text = QTextEdit()
+        text.setReadOnly(True)
+
+        if not tasks:
+            msg = (
+                "🎉 الان هیچ تکلیف بازی نداری!\n\n"
+                "می‌تونی:\n"
+                "- درس‌های قبلی رو مرور کنی\n"
+                "- یک فصل جلوتر بخونی\n"
+                "- یا کمی استراحت با وجدان راحت داشته باشی 🙂"
+            )
+        else:
+            if fatigue < 33:
+                mood = "انرژی‌ات عالیه 💪"
+                hint = "اول سراغ سخت‌ترین و نزدیک‌ترین ددلاین‌ها برو، بعد کارهای سبک‌تر."
+            elif fatigue < 66:
+                mood = "انرژی‌ات متوسطه 🙂"
+                hint = "ترکیبی از کارهای سخت و متوسط رو با استراحت‌های کوتاه انجام بده."
+            else:
+                mood = "کمی خسته‌ای 😴"
+                hint = "امروز سبک‌تر کار کن، ۲–۳ کار مهم رو جلو ببر و بقیه رو بذار برای فردا."
+
+            msg = f"{mood}\n\n{hint}\n\n"
+            msg += "✅ چند ایده برای شروع:\n"
+            msg += "- یک تسک ۲۰–۳۰ دقیقه‌ای انتخاب کن و فقط ۱۰ دقیقه شروع کن.\n"
+            msg += "- اگر ذهنت شلوغه، اول ۵ دقیقه بنویس چی ذهنت رو درگیر کرده.\n"
+            msg += "- بین هر ۲۵ دقیقه مطالعه، ۵ دقیقه کشش یا قدم‌زدن."
+
+        text.setText(msg)
+        layout.addWidget(text)
+
+        btn = QPushButton("باشه، بزن بریم! 🚀")
+        btn.clicked.connect(self.accept)
+        layout.addWidget(btn)
+
+
+# -------------------------- دیالوگ Focus Mode -------------------------- #
+class FocusDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        # حالت Zen بدون قاب، اما نه fullscreen
+        self.setModal(True)
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setMinimumSize(900, 600)
+
+        self.remaining = 25 * 60
+        self.timer_running = False
+
+        # لایه‌ی اصلی
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(40, 40, 40, 40)
+        main_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # کارت شیشه‌ای
+        glass = QWidget()
+        glass.setObjectName("glass")
+        glass_layout = QVBoxLayout(glass)
+        glass_layout.setContentsMargins(40, 40, 40, 40)
+        glass_layout.setSpacing(30)
+        glass_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        title_label = QLabel("حالت تمرکز — Zen Mode")
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title_label.setStyleSheet("""
+            QLabel {
+                color: #E5E7EB;
+                font-size: 22px;
+                font-weight: 600;
+            }
+        """)
+
+        self.time_label = QLabel("25:00")
+        self.time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        f = QFont("Vazirmatn", 60)
+        f.setBold(True)
+        self.time_label.setFont(f)
+
+        quote_label = QLabel("درد یا لذت کاری که میکنی نمیمونه ... اما افتخار یا شرمندگیش چرا")
+        quote_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        quote_label.setWordWrap(True)
+        quote_label.setStyleSheet("color: #9CA3AF; font-size: 16px;")
+
+        helper_label = QLabel("روی همین ثانیه‌ها تمرکز کن. بقیه دنیا صبر می‌کنه.")
+        helper_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        helper_label.setStyleSheet("color: #6B7280; font-size: 13px;")
+
+        # دکمه‌ها
+        btns = QHBoxLayout()
+        btns.setSpacing(18)
+        btns.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.start_btn = QPushButton("شروع")
+        self.reset_btn = QPushButton("ریست")
+        self.exit_btn = QPushButton("خروج")
+
+        for btn in (self.start_btn, self.reset_btn, self.exit_btn):
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setMinimumWidth(140)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background: rgba(56, 189, 248, 0.12);
+                    color: #E5E7EB;
+                    border-radius: 14px;
+                    padding: 9px 16px;
+                    border: 1px solid rgba(56, 189, 248, 0.7);
+                    font-weight: 500;
+                }
+                QPushButton:hover {
+                    background: rgba(56, 189, 248, 0.25);
+                }
+            """)
+
+        btns.addWidget(self.start_btn)
+        btns.addWidget(self.reset_btn)
+        btns.addWidget(self.exit_btn)
+
+        glass_layout.addWidget(title_label)
+        glass_layout.addWidget(self.time_label)
+        glass_layout.addWidget(quote_label)
+        glass_layout.addWidget(helper_label)
+        glass_layout.addSpacing(10)
+        glass_layout.addLayout(btns)
+
+        main_layout.addWidget(glass)
+
+        # استایل کارت شیشه‌ای
+        self.setStyleSheet("""
+            #glass {
+                background: rgba(15, 23, 42, 0.88);
+                border-radius: 28px;
+                border: 1px solid rgba(148, 163, 184, 0.55);
+            }
+        """)
+
+        # تایمر
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.tick)
+        self.start_btn.clicked.connect(self.toggle_timer)
+        self.reset_btn.clicked.connect(self.reset_timer)
+        self.exit_btn.clicked.connect(self.close)
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        # نسخه امن Zen Mode بدون crash
+        self.showMaximized()
+
+    def toggle_timer(self):
+        if self.timer_running:
+            self.timer.stop()
+            self.timer_running = False
+            self.start_btn.setText("ادامه")
+        else:
+            self.timer.start(1000)
+            self.timer_running = True
+            self.start_btn.setText("توقف")
+
+    def reset_timer(self):
+        self.timer.stop()
+        self.timer_running = False
+        self.remaining = 25 * 60
+        self.time_label.setText("25:00")
+        self.start_btn.setText("شروع")
+
+    def tick(self):
+        self.remaining -= 1
+        if self.remaining <= 0:
+            self.timer.stop()
+            self.timer_running = False
+            self.time_label.setText("00:00")
+            self.start_btn.setText("تمام شد")
+            QMessageBox.information(self, "👏 پایان جلسه",
+                                    "این جلسه تمرکز رو با موفقیت تموم کردی!\n"
+                                    "درد یا لذت این لحظات گذشت… اما افتخارش موند 😉")
+            return
+
+        m = self.remaining // 60
+        s = self.remaining % 60
+        self.time_label.setText(f"{m:02d}:{s:02d}")
+
+
+# -------------------------- برنامه اصلی -------------------------- #
+class StudyManager(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("مدیریت مطالعه و تکالیف — نئون شیشه‌ای")
+        self.setGeometry(100, 60, 1280, 800)
+
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        font = QFont("Vazirmatn", 11)
+        QApplication.setFont(font)
+
+        palette = QPalette()
+        palette.setColor(QPalette.ColorRole.Window, QColor(15, 23, 42))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor("#E5E7EB"))
+        palette.setColor(QPalette.ColorRole.Base, QColor(15, 23, 42))
+        palette.setColor(QPalette.ColorRole.Text, QColor("#F9FAFB"))
+        palette.setColor(QPalette.ColorRole.Button, QColor(15, 23, 42))
+        palette.setColor(QPalette.ColorRole.ButtonText, QColor("#E5E7EB"))
+        palette.setColor(QPalette.ColorRole.Highlight, QColor(56, 189, 248))
+        palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#020617"))
+        self.setPalette(palette)
+
+        # تم شیشه‌ای برای کارت‌ها (radius=24, glass light)
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #020617;
+            }
+            QGroupBox {
+                background: rgba(15, 23, 42, 0.45);
+                border-radius: 24px;
+                border: 1px solid rgba(148, 163, 184, 0.35);
+                padding: 18px;
+                color: #E5E7EB;
+            }
+            QGroupBox::title {
+                color: #38BDF8;
+                font-size: 16px;
+                padding: 6px 12px;
+            }
+            QLabel {
+                background: transparent;
+                color: #E5E7EB;
+                font-size: 13px;
+            }
+            QPushButton {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #0EA5E9,
+                    stop:1 #38BDF8
+                );
+                color: #020617;
+                border-radius: 10px;
+                padding: 8px 14px;
+                font-weight: 600;
+                border: 1px solid rgba(56, 189, 248, 0.6);
+            }
+            QPushButton:hover {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #22D3EE,
+                    stop:1 #38BDF8
+                );
+            }
+            QLineEdit, QTextEdit, QComboBox {
+                background: rgba(15, 23, 42, 0.8);
+                border: 1px solid rgba(148, 163, 184, 0.6);
+                border-radius: 10px;
+                padding: 6px 8px;
+                color: #F9FAFB;
+            }
+            QTableWidget {
+                background: rgba(15, 23, 42, 0.8);
+                border-radius: 16px;
+                color: #F9FAFB;
+                gridline-color: rgba(30, 64, 175, 0.7);
+            }
+            QHeaderView::section {
+                background: rgba(15, 23, 42, 0.9);
+                color: #E5E7EB;
+                font-weight: 600;
+                padding: 8px;
+                border: none;
+            }
+            QTabBar::tab {
+                background: transparent;
+                color: #9CA3AF;
+                padding: 10px 20px;
+                margin: 2px;
+                border-radius: 12px;
+            }
+            QTabBar::tab:selected {
+                background: rgba(15, 23, 42, 0.9);
+                color: #F9FAFB;
+                border: 1px solid rgba(56, 189, 248, 0.7);
+            }
+        """)
+
+        self.tasks = []
+        self.central_tab = QTabWidget()
+        self.setCentralWidget(self.central_tab)
+
+        # ----------------- تب داشبورد ----------------- #
+        dashboard_widget = QWidget()
+        dashboard_layout = QVBoxLayout(dashboard_widget)
+        dashboard_layout.setSpacing(40)  # فاصله زیاد بین کارت‌ها
+        dashboard_layout.setContentsMargins(18, 18, 18, 18)
+
+        # -------- کارت ۱: نمودارها -------- #
+        charts_group = QGroupBox("کارهای باقی‌مانده و بار کاری")
+        charts_layout = QVBoxLayout(charts_group)
+        charts_layout.setContentsMargins(12, 12, 12, 12)
+        charts_layout.setSpacing(12)
+
+        self.weekly_chart = pg.PlotWidget(title="بار کاری ۷ روز آینده")
+        self.daily_chart = pg.PlotWidget(title="کارهای باقی‌مانده بر اساس سختی")
+        self.style_chart(self.weekly_chart)
+        self.style_chart(self.daily_chart)
+
+        charts_layout.addWidget(self.weekly_chart, 1)
+        charts_layout.addWidget(self.daily_chart, 1)
+
+        # -------- کارت ۲: وضعیت امروز (حلقه‌ها + ساعت) -------- #
+        status_group = QGroupBox("وضعیت امروز")
+        status_layout = QHBoxLayout(status_group)
+        status_layout.setContentsMargins(16, 16, 16, 16)
+        status_layout.setSpacing(24)
+
+        self.progress_ring = CircularProgress("پیشرفت کل", QColor("#38BDF8"))
+        self.energy_ring = CircularProgress("انرژی امروز", QColor("#22C55E"))
+
+        # کارت ساعت وسط
+        clock_container = QWidget()
+        clock_layout = QVBoxLayout(clock_container)
+        clock_layout.setContentsMargins(0, 0, 0, 0)
+        clock_layout.setSpacing(8)
+
+        self.clock_label = QLabel()
+        self.clock_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.clock_label.setStyleSheet("""
+            QLabel {
+                font-size: 30px;
+                font-weight: 600;
+                color: #38BDF8;
+                padding: 14px;
+                border-radius: 18px;
+                background: qradialgradient(
+                    cx:0.5, cy:0.5, radius:1,
+                    fx:0.5, fy:0.5,
+                    stop:0 rgba(56, 189, 248, 0.25),
+                    stop:1 rgba(15, 23, 42, 0.95)
+                );
+            }
+        """)
+
+        clock_subtitle = QLabel("ساعت فعلی سیستم")
+        clock_subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        clock_subtitle.setStyleSheet("color: #9CA3AF; font-size: 12px;")
+
+        clock_layout.addWidget(self.clock_label)
+        clock_layout.addWidget(clock_subtitle)
+
+        status_layout.addWidget(self.progress_ring, 1)
+        status_layout.addWidget(clock_container, 1)
+        status_layout.addWidget(self.energy_ring, 1)
+
+        # ردیف کارت‌های بالا
+        top_row = QHBoxLayout()
+        top_row.setSpacing(40)
+        top_row.addWidget(charts_group, 2)
+        top_row.addWidget(status_group, 1)
+
+        dashboard_layout.addLayout(top_row)
+
+        # -------- کارت ۳: تکالیف امروز -------- #
+        self.today_tasks_group = QGroupBox("تکالیف امروز")
+        today_tasks_layout = QVBoxLayout(self.today_tasks_group)
+        self.today_tasks_group.setMinimumHeight(320)
+
+        self.today_tasks_table = QTableWidget(0, 8)
+        self.today_tasks_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.today_tasks_table.setHorizontalHeaderLabels(
+            ["درس", "عنوان", "سختی", "پیشرفت", "تاریخ تحویل",
+             "انجام شد؟", "روز تا ددلاین", "زمان باقیمانده (دقیقه)"]
+        )
+        self.today_tasks_table.horizontalHeader().setStretchLastSection(True)
+        self.today_tasks_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.today_tasks_table.verticalHeader().setVisible(False)
+        self.today_tasks_table.setShowGrid(False)
+        self.today_tasks_table.setMinimumHeight(240)
+        self.today_tasks_table.verticalHeader().setDefaultSectionSize(38)
+        self.today_tasks_table.setStyleSheet("""
+            QTableWidget {
+                background: rgba(15, 23, 42, 0.55);
+                border-radius: 18px;
+                color: #F9FAFB;
+                gridline-color: rgba(56, 189, 248, 0.25);
+            }
+            QTableWidget::item {
+                padding: 6px;
+            }
+            QTableWidget::item:selected {
+                background: rgba(56, 189, 248, 0.35);
+                color: #020617;
+                font-weight: bold;
+            }
+        """)
+
+        today_tasks_layout.addWidget(self.today_tasks_table)
+        dashboard_layout.addWidget(self.today_tasks_group)
+
+        # دکمه‌های پایین داشبورد
+        bottom_buttons = QHBoxLayout()
+        bottom_buttons.setSpacing(16)
+        self.assistant_btn = QPushButton("دستیار هوشمند 🤖")
+        self.assistant_btn.clicked.connect(self.open_assistant)
+        self.focus_btn = QPushButton("حالت تمرکز 🎯")
+        self.focus_btn.clicked.connect(self.open_focus_mode)
+        bottom_buttons.addWidget(self.assistant_btn)
+        bottom_buttons.addWidget(self.focus_btn)
+        dashboard_layout.addLayout(bottom_buttons)
+
+        self.central_tab.addTab(dashboard_widget, "داشبورد")
+
+        # ----------------- تب مدیریت تکالیف ----------------- #
+        tasks_widget = QWidget()
+        tasks_layout = QVBoxLayout(tasks_widget)
+        tasks_layout.setSpacing(14)
+        tasks_layout.setContentsMargins(18, 18, 18, 18)
+
+        self.tasks_group = QGroupBox("مدیریت تکالیف")
+        tasks_group_layout = QVBoxLayout(self.tasks_group)
+
+        form_layout = QHBoxLayout()
+        self.subject_edit = QLineEdit(placeholderText="درس")
+        self.title_edit = QLineEdit(placeholderText="عنوان")
+        self.difficulty_combo = QComboBox()
+        self.difficulty_combo.addItems(["1", "2", "3", "4", "5"])
+        self.progress_edit = QLineEdit(placeholderText="پیشرفت (0-100)")
+        self.due_date_edit = JalaliDateEdit()
+        self.completed_check = QCheckBox("انجام شد؟")
+        add_btn = QPushButton("افزودن / ویرایش")
+        add_btn.clicked.connect(self.add_task)
+        delete_btn = QPushButton("حذف")
+        delete_btn.clicked.connect(self.delete_task)
+
+        form_layout.addWidget(self.subject_edit)
+        form_layout.addWidget(self.title_edit)
+        form_layout.addWidget(self.difficulty_combo)
+        form_layout.addWidget(self.progress_edit)
+        form_layout.addWidget(self.due_date_edit)
+        form_layout.addWidget(self.completed_check)
+        form_layout.addWidget(add_btn)
+        form_layout.addWidget(delete_btn)
+        tasks_group_layout.addLayout(form_layout)
+
+        self.tasks_table = QTableWidget(0, 8)
+        self.tasks_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.tasks_table.setHorizontalHeaderLabels(
+            ["درس", "عنوان", "سختی", "پیشرفت", "تاریخ تحویل",
+             "انجام شد؟", "روز تا ددلاین", "زمان باقیمانده (دقیقه)"]
+        )
+        self.tasks_table.horizontalHeader().setStretchLastSection(True)
+        self.tasks_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.tasks_table.verticalHeader().setVisible(False)
+        self.tasks_table.setShowGrid(False)
+        self.tasks_table.itemSelectionChanged.connect(self.load_selected_task)
+        tasks_group_layout.addWidget(self.tasks_table)
+        tasks_layout.addWidget(self.tasks_group)
+
+        self.central_tab.addTab(tasks_widget, "مدیریت تکالیف")
+
+        # ----------------- تب برنامه‌ریزی هوشمند ----------------- #
+        planner_widget = QWidget()
+        planner_layout = QVBoxLayout(planner_widget)
+        planner_layout.setSpacing(14)
+        planner_layout.setContentsMargins(18, 18, 18, 18)
+
+        self.planner_group = QGroupBox("برنامه‌ریزی هوشمند روزانه")
+        planner_group_layout = QVBoxLayout(self.planner_group)
+
+        factors_layout = QHBoxLayout()
+        self.sleep_edit = QLineEdit(placeholderText="مقدار خواب (ساعت)")
+        self.study_today_edit = QLineEdit(placeholderText="مطالعه امروز (دقیقه)")
+        self.mood_combo = QComboBox()
+        self.mood_combo.addItems(["عالی", "خوب", "متوسط", "بد", "خیلی بد"])
+        self.hard_subjects_edit = QLineEdit(placeholderText="تعداد درس‌های سخت")
+        self.breaks_edit = QLineEdit(placeholderText="تعداد استراحت‌ها")
+        factors_layout.addWidget(self.sleep_edit)
+        factors_layout.addWidget(self.study_today_edit)
+        factors_layout.addWidget(self.mood_combo)
+        factors_layout.addWidget(self.hard_subjects_edit)
+        factors_layout.addWidget(self.breaks_edit)
+        planner_group_layout.addLayout(factors_layout)
+
+        plan_btn = QPushButton("تولید برنامه روزانه")
+        plan_btn.clicked.connect(self.generate_plan)
+        planner_group_layout.addWidget(plan_btn)
+
+        self.plan_text = QTextEdit()
+        planner_group_layout.addWidget(self.plan_text)
+
+        self.dashboard_cards_group = QGroupBox("اطلاعات کلی امروز")
+        dashboard_cards_layout = QGridLayout(self.dashboard_cards_group)
+        self.progress_label = QLabel("پیشرفت کلی: 0%")
+        self.study_time_label = QLabel("زمان مطالعه پیشنهادی امروز: 0 دقیقه")
+        self.completed_tasks_label = QLabel("تکالیف انجام‌شده: 0")
+        self.overdue_tasks_label = QLabel("تکالیف عقب‌افتاده: 0")
+
+        card_style = """
+            QLabel {
+                background: rgba(15, 23, 42, 0.75);
+                border-radius: 14px;
+                padding: 10px 12px;
+                font-size: 13px;
+            }
+        """
+        self.progress_label.setStyleSheet(card_style + "border-left: 4px solid #38BDF8;")
+        self.study_time_label.setStyleSheet(card_style + "border-left: 4px solid #22C55E;")
+        self.completed_tasks_label.setStyleSheet(card_style + "border-left: 4px solid #EAB308;")
+        self.overdue_tasks_label.setStyleSheet(card_style + "border-left: 4px solid #EF4444;")
+
+        dashboard_cards_layout.addWidget(self.progress_label, 0, 0)
+        dashboard_cards_layout.addWidget(self.study_time_label, 0, 1)
+        dashboard_cards_layout.addWidget(self.completed_tasks_label, 1, 0)
+        dashboard_cards_layout.addWidget(self.overdue_tasks_label, 1, 1)
+        planner_group_layout.addWidget(self.dashboard_cards_group)
+
+        planner_layout.addWidget(self.planner_group)
+        self.central_tab.addTab(planner_widget, "برنامه‌ریزی هوشمند")
+
+        # ----------------- تب پیشنهادگر ----------------- #
+        recommender_widget = QWidget()
+        recommender_layout = QVBoxLayout(recommender_widget)
+        recommender_layout.setSpacing(14)
+        recommender_layout.setContentsMargins(18, 18, 18, 18)
+
+        self.recommender_group = QGroupBox("سیستم پیشنهادگر هوشمند")
+        recommender_group_layout = QVBoxLayout(self.recommender_group)
+
+        update_reco_btn = QPushButton("به‌روزرسانی پیشنهادها")
+        update_reco_btn.clicked.connect(self.update_recommendations)
+
+        self.reco_table = QTableWidget(0, 7)
+        self.reco_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.reco_table.setHorizontalHeaderLabels([
+            "درس", "عنوان", "ددلاین", "روز تا ددلاین",
+            "باقی‌مانده (%)", "اولویت", "زمان پیشنهادی امروز (دقیقه)"
+        ])
+        self.reco_table.horizontalHeader().setStretchLastSection(True)
+        self.reco_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.reco_table.verticalHeader().setVisible(False)
+        self.reco_table.setShowGrid(False)
+
+        self.recommendation_text = QTextEdit()
+        self.recommendation_text.setReadOnly(True)
+
+        recommender_group_layout.addWidget(update_reco_btn)
+        recommender_group_layout.addWidget(self.reco_table)
+        recommender_group_layout.addWidget(self.recommendation_text)
+        recommender_layout.addWidget(self.recommender_group)
+
+        self.central_tab.addTab(recommender_widget, "پیشنهادگر هوشمند")
+
+        # ----------------- تب تقویم ----------------- #
+        calendar_widget = QWidget()
+        calendar_layout = QVBoxLayout(calendar_widget)
+        calendar_layout.setSpacing(14)
+        calendar_layout.setContentsMargins(18, 18, 18, 18)
+
+        self.calendar_group = QGroupBox("تقویم تکالیف")
+        calendar_group_layout = QVBoxLayout(self.calendar_group)
+
+        self.jcalendar = JalaliCalendar()
+        self.jcalendar.selectedDateChanged.connect(self.update_calendar_tasks_for_selected_date)
+
+        self.calendar_tasks_label = QLabel("تکالیف این روز")
+        self.calendar_tasks_table = QTableWidget(0, 6)
+        self.calendar_tasks_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.calendar_tasks_table.setHorizontalHeaderLabels(
+            ["درس", "عنوان", "سختی", "پیشرفت", "انجام شد؟", "زمان باقیمانده (دقیقه)"]
+        )
+        self.calendar_tasks_table.horizontalHeader().setStretchLastSection(True)
+        self.calendar_tasks_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.calendar_tasks_table.verticalHeader().setVisible(False)
+        self.calendar_tasks_table.setShowGrid(False)
+
+        calendar_group_layout.addWidget(self.jcalendar)
+        calendar_group_layout.addWidget(self.calendar_tasks_label)
+        calendar_group_layout.addWidget(self.calendar_tasks_table)
+
+        calendar_layout.addWidget(self.calendar_group)
+        self.central_tab.addTab(calendar_widget, "تقویم")
+
+        # INIT
+        self.update_tasks_table()
+        self.update_today_tasks_table()
+        self.update_dashboard()
+        self.update_recommendations()
+        self.update_calendar_marks()
+
+        self.clock_timer = QTimer()
+        self.clock_timer.timeout.connect(self.update_clock)
+        self.clock_timer.start(1000)
+        self.update_clock()
+
+    # ---------- استایل نمودار ---------- #
+    def style_chart(self, chart: pg.PlotWidget):
+        chart.setBackground((0, 0, 0, 0))
+        chart.showGrid(x=False, y=False)
+        axis_pen = pg.mkPen(color=(200, 200, 200, 120), width=1)
+        chart.getAxis('left').setPen(axis_pen)
+        chart.getAxis('bottom').setPen(axis_pen)
+        text_pen = pg.mkPen(QColor("#38BDF8"))
+        chart.getAxis('left').setTextPen(text_pen)
+        chart.getAxis('bottom').setTextPen(text_pen)
+        font = QFont("Vazirmatn", 10)
+        font.setBold(True)
+        chart.getAxis('left').setStyle(tickFont=font)
+        chart.getAxis('bottom').setStyle(tickFont=font)
+
+    # ---------- ابزارها ---------- #
+    def estimate_task_minutes(self, task: Task) -> int:
+        remaining = max(0, 100 - task.progress)
+        estimated = int(remaining * 0.8 * (0.6 + 0.1 * task.difficulty))
+        return max(15, estimated)
+
+    # ---------- مدیریت تکالیف ---------- #
+    def add_task(self):
+        subject = self.subject_edit.text().strip()
+        title = self.title_edit.text().strip()
+        if not subject or not title:
+            QMessageBox.warning(self, "خطا", "درس و عنوان الزامی است.")
+            return
+        try:
+            difficulty = int(self.difficulty_combo.currentText())
+            prog_text = self.progress_edit.text().strip()
+            progress = int(prog_text) if prog_text else 0
+            if not 0 <= progress <= 100:
+                raise ValueError
+        except ValueError:
+            QMessageBox.warning(self, "خطا", "پیشرفت باید عددی بین ۰ تا ۱۰۰ باشد.")
+            return
+        due_date = self.due_date_edit.date()
+        completed = self.completed_check.isChecked()
+
+        selected = self.tasks_table.selectedItems()
+        if selected:
+            row = selected[0].row()
+            self.tasks[row] = Task(subject, title, difficulty, progress, due_date, completed)
+        else:
+            self.tasks.append(Task(subject, title, difficulty, progress, due_date, completed))
+
+        self.clear_form()
+        self.update_tasks_table()
+        self.update_today_tasks_table()
+        self.update_dashboard()
+        self.update_recommendations()
+        self.update_calendar_marks()
+
+    def delete_task(self):
+        selected = self.tasks_table.selectedItems()
+        if not selected:
+            return
+        row = selected[0].row()
+        if 0 <= row < len(self.tasks):
+            del self.tasks[row]
+        self.update_tasks_table()
+        self.update_today_tasks_table()
+        self.update_dashboard()
+        self.update_recommendations()
+        self.update_calendar_marks()
+
+    def load_selected_task(self):
+        selected = self.tasks_table.selectedItems()
+        if not selected:
+            return
+        row = selected[0].row()
+        if not (0 <= row < len(self.tasks)):
+            return
+        task = self.tasks[row]
+        self.subject_edit.setText(task.subject)
+        self.title_edit.setText(task.title)
+        self.difficulty_combo.setCurrentText(str(task.difficulty))
+        self.progress_edit.setText(str(task.progress))
+        self.due_date_edit.setJDate(task.due_date)
+        self.completed_check.setChecked(task.completed)
+
+    def clear_form(self):
+        self.subject_edit.clear()
+        self.title_edit.clear()
+        self.difficulty_combo.setCurrentIndex(0)
+        self.progress_edit.clear()
+        self.due_date_edit.setJDate(jdate.today())
+        self.completed_check.setChecked(False)
+
+    def update_tasks_table(self):
+        self.tasks_table.setRowCount(len(self.tasks))
+        today = jdate.today()
+        for i, task in enumerate(self.tasks):
+            self.tasks_table.setItem(i, 0, QTableWidgetItem(task.subject))
+            self.tasks_table.setItem(i, 1, QTableWidgetItem(task.title))
+            self.tasks_table.setItem(i, 2, QTableWidgetItem(str(task.difficulty)))
+            self.tasks_table.setItem(i, 3, QTableWidgetItem(str(task.progress)))
+            due_str = f"{task.due_date.year}/{task.due_date.month:02d}/{task.due_date.day:02d}"
+            self.tasks_table.setItem(i, 4, QTableWidgetItem(due_str))
+            self.tasks_table.setItem(i, 5, QTableWidgetItem("بله" if task.completed else "خیر"))
+            days_to_due = (task.due_date - today).days
+            self.tasks_table.setItem(i, 6, QTableWidgetItem(str(days_to_due)))
+            est = self.estimate_task_minutes(task)
+            self.tasks_table.setItem(i, 7, QTableWidgetItem(str(est)))
+
+    def update_today_tasks_table(self):
+        self.today_tasks_table.clearSpans()
+        today = jdate.today()
+        today_tasks = [t for t in self.tasks if t.due_date <= today and not t.completed]
+
+        if not today_tasks:
+            self.today_tasks_table.setRowCount(1)
+            for c in range(8):
+                self.today_tasks_table.setItem(0, c, QTableWidgetItem(""))
+            item = QTableWidgetItem("هیچ تکلیفی برای امروز نیست ✨")
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.today_tasks_table.setItem(0, 0, item)
+            self.today_tasks_table.setSpan(0, 0, 1, 8)
+            return
+
+        self.today_tasks_table.setRowCount(len(today_tasks))
+        for i, task in enumerate(today_tasks):
+            self.today_tasks_table.setItem(i, 0, QTableWidgetItem(task.subject))
+            self.today_tasks_table.setItem(i, 1, QTableWidgetItem(task.title))
+            self.today_tasks_table.setItem(i, 2, QTableWidgetItem(str(task.difficulty)))
+            self.today_tasks_table.setItem(i, 3, QTableWidgetItem(str(task.progress)))
+            due_str = f"{task.due_date.year}/{task.due_date.month:02d}/{task.due_date.day:02d}"
+            self.today_tasks_table.setItem(i, 4, QTableWidgetItem(due_str))
+            self.today_tasks_table.setItem(i, 5, QTableWidgetItem("بله" if task.completed else "خیر"))
+            days_to_due = (task.due_date - today).days
+            self.today_tasks_table.setItem(i, 6, QTableWidgetItem(str(days_to_due)))
+            est = self.estimate_task_minutes(task)
+            self.today_tasks_table.setItem(i, 7, QTableWidgetItem(str(est)))
+
+    # ---------- خستگی و برنامه روزانه ---------- #
+    def calculate_fatigue(self):
+        try:
+            sleep = float(self.sleep_edit.text() or 8)
+            if sleep < 0:
+                raise ValueError("خواب منفی نمی‌شود.")
+            study_today = float(self.study_today_edit.text() or 0)
+            if study_today < 0:
+                raise ValueError("مطالعه منفی نمی‌شود.")
+            mood = {"عالی": 0, "خوب": 20, "متوسط": 50, "بد": 80, "خیلی بد": 100}[self.mood_combo.currentText()]
+            hard_subjects = int(self.hard_subjects_edit.text() or 0)
+            breaks = int(self.breaks_edit.text() or 0)
+            if hard_subjects < 0 or breaks < 0:
+                raise ValueError("مقادیر منفی مجاز نیستند.")
+            fatigue = ((8 - sleep) * 10 + study_today / 10 + mood + hard_subjects * 10 - breaks * 5)
+            fatigue = max(0, min(100, fatigue))
+            return fatigue
+        except ValueError as e:
+            QMessageBox.warning(self, "خطا", str(e))
+            raise
+
+    def generate_plan(self):
+        try:
+            fatigue = self.calculate_fatigue()
+        except ValueError:
+            return
+
+        if fatigue < 33:
+            study_time = 240
+        elif fatigue < 66:
+            study_time = 180
+        else:
+            study_time = 120
+
+        today = jdate.today()
+        pending_tasks = [t for t in self.tasks if not t.completed]
+        if not pending_tasks:
+            self.plan_text.setText(
+                "هیچ تکلیفی باقی نمانده است. 🎉\nامروز می‌توانی روی مرور یا جلو زدن از برنامه تمرکز کنی."
+            )
+        else:
+            weights = []
+            for t in pending_tasks:
+                days_to_due = max(1, (t.due_date - today).days)
+                weight = t.difficulty * (100 - t.progress) / days_to_due
+                weights.append(weight)
+            total_weight = sum(weights) or 1
+            lines = [
+                f"خستگی امروز: {fatigue:.0f}%",
+                f"زمان مطالعه پیشنهادی: {study_time} دقیقه",
+                "",
+                "برنامه پیشنهادی امروز:"
+            ]
+            for i, task in enumerate(pending_tasks):
+                time_alloc = int((weights[i] / total_weight) * study_time)
+                est_total = self.estimate_task_minutes(task)
+                lines.append(
+                    f"- {task.title} ({task.subject}): حدود {time_alloc} دقیقه امروز "
+                    f"(زمان تقریبی تا اتمام: {est_total} دقیقه)"
+                )
+            self.plan_text.setText("\n".join(lines))
+
+        self.update_dashboard()
+        self.update_recommendations()
+
+    # ---------- داشبورد + نمودارهای نئونی ---------- #
+    def update_dashboard(self):
+        if self.tasks:
+            total_progress = sum(t.progress for t in self.tasks) / len(self.tasks)
+        else:
+            total_progress = 0
+        self.progress_label.setText(f"پیشرفت کلی: {total_progress:.1f}%")
+        self.progress_ring.setValue(total_progress)
+
+        try:
+            fatigue = self.calculate_fatigue()
+        except ValueError:
+            fatigue = 50
+        energy = max(0, 100 - int(fatigue))
+        self.energy_ring.setValue(energy)
+
+        if fatigue < 33:
+            suggested_time = 240
+        elif fatigue < 66:
+            suggested_time = 180
+        else:
+            suggested_time = 120
+        self.study_time_label.setText(f"زمان مطالعه پیشنهادی امروز: {suggested_time} دقیقه")
+
+        completed = sum(1 for t in self.tasks if t.completed)
+        self.completed_tasks_label.setText(f"تکالیف انجام‌شده: {completed}")
+
+        today = jdate.today()
+        overdue = sum(1 for t in self.tasks if not t.completed and t.due_date < today)
+        self.overdue_tasks_label.setText(f"تکالیف عقب‌افتاده: {overdue}")
+
+        # نمودار هفتگی نئونی
+        days_labels = ["امروز", "۱ روز بعد", "۲ روز بعد", "۳ روز بعد", "۴ روز بعد", "۵ روز بعد", "۶ روز بعد"]
+        x_weekly = list(range(1, 8))
+        y_weekly = []
+        for offset in range(7):
+            workload = 0
+            for t in self.tasks:
+                if t.completed:
+                    continue
+                days_to_due = (t.due_date - today).days
+                if days_to_due == offset:
+                    remaining = max(0, 100 - t.progress)
+                    workload += remaining * t.difficulty
+            y_weekly.append(workload)
+
+        self.weekly_chart.clear()
+        curve_week = pg.PlotCurveItem(x_weekly, y_weekly, pen=pg.mkPen((56, 189, 248), width=3))
+        zero_curve_week = pg.PlotCurveItem(x_weekly, [0] * len(x_weekly))
+        grad1 = QLinearGradient(0, 0, 0, 1)
+        grad1.setColorAt(0, QColor(56, 189, 248, 120))
+        grad1.setColorAt(1, QColor(56, 189, 248, 10))
+        fill_week = pg.FillBetweenItem(curve_week, zero_curve_week, brush=QBrush(grad1))
+        self.weekly_chart.addItem(curve_week)
+        self.weekly_chart.addItem(fill_week)
+        for x, y in zip(x_weekly, y_weekly):
+            dot = pg.ScatterPlotItem([x], [y], symbol='o', size=10,
+                                     brush=QColor(56, 189, 248),
+                                     pen=pg.mkPen(color=(255, 255, 255), width=2))
+            self.weekly_chart.addItem(dot)
+        ticks = [(val, label) for val, label in zip(x_weekly, days_labels)]
+        self.weekly_chart.getAxis('bottom').setTicks([ticks])
+        self.weekly_chart.getAxis('bottom').setTextPen(pg.mkPen(QColor("#38BDF8")))
+
+        # نمودار روزانه نئونی
+        x_daily = [1, 2, 3, 4, 5]
+        y_daily = [0, 0, 0, 0, 0]
+        for t in self.tasks:
+            if t.completed:
+                continue
+            idx = t.difficulty - 1
+            if 0 <= idx < 5:
+                remaining = max(0, 100 - t.progress)
+                y_daily[idx] += remaining
+
+        self.daily_chart.clear()
+        curve_day = pg.PlotCurveItem(x_daily, y_daily, pen=pg.mkPen((129, 140, 248), width=3))
+        zero_curve_day = pg.PlotCurveItem(x_daily, [0] * len(x_daily))
+        grad2 = QLinearGradient(0, 0, 0, 1)
+        grad2.setColorAt(0, QColor(129, 140, 248, 120))
+        grad2.setColorAt(1, QColor(129, 140, 248, 10))
+        fill_day = pg.FillBetweenItem(curve_day, zero_curve_day, brush=QBrush(grad2))
+        self.daily_chart.addItem(curve_day)
+        self.daily_chart.addItem(fill_day)
+        for x, y in zip(x_daily, y_daily):
+            dot = pg.ScatterPlotItem([x], [y], symbol='o', size=10,
+                                     brush=QColor(129, 140, 248),
+                                     pen=pg.mkPen(color=(255, 255, 255), width=2))
+            self.daily_chart.addItem(dot)
+        ticks_diff = [(d, f"سختی {d}") for d in x_daily]
+        self.daily_chart.getAxis('bottom').setTicks([ticks_diff])
+        self.daily_chart.getAxis('bottom').setTextPen(pg.mkPen(QColor("#38BDF8")))
+
+    # ---------- پیشنهادگر ---------- #
+    def update_recommendations(self):
+        today = jdate.today()
+        pending_tasks = [t for t in self.tasks if not t.completed]
+        self.reco_table.setRowCount(0)
+
+        if not pending_tasks:
+            self.recommendation_text.setText(
+                "🎉 هیچ تکلیف بازی نداری!\n"
+                "امروز می‌تونی روی مرور بلندمدت، منابع تکمیلی یا استراحت تمرکز کنی."
+            )
+            return
+
+        try:
+            fatigue = self.calculate_fatigue()
+        except ValueError:
+            fatigue = 50
+
+        if fatigue < 33:
+            total_minutes = 240
+            energy_label = "انرژی بالا"
+        elif fatigue < 66:
+            total_minutes = 180
+            energy_label = "انرژی متوسط"
+        else:
+            total_minutes = 120
+            energy_label = "انرژی پایین"
+
+        scored = []
+        for t in pending_tasks:
+            days_to_due = (t.due_date - today).days
+            if days_to_due <= 0:
+                urgency = 3.0
+            elif days_to_due == 1:
+                urgency = 2.5
+            elif days_to_due <= 3:
+                urgency = 2.0
+            elif days_to_due <= 7:
+                urgency = 1.5
+            else:
+                urgency = 1.0
+            remaining = max(0, 100 - t.progress)
+            score = urgency * 2 + t.difficulty * 1.5 + remaining / 20.0
+            scored.append((score, t, days_to_due, remaining))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        total_score = sum(s[0] for s in scored) or 1
+
+        self.reco_table.setRowCount(len(scored))
+        for row, (score, t, days_to_due, remaining) in enumerate(scored):
+            due_str = f"{t.due_date.year}/{t.due_date.month:02d}/{t.due_date.day:02d}"
+            if days_to_due <= 0:
+                days_text = "امروز / عقب‌افتاده"
+            else:
+                days_text = f"{days_to_due}"
+            alloc = int(total_minutes * (score / total_score))
+            self.reco_table.setItem(row, 0, QTableWidgetItem(t.subject))
+            self.reco_table.setItem(row, 1, QTableWidgetItem(t.title))
+            self.reco_table.setItem(row, 2, QTableWidgetItem(due_str))
+            self.reco_table.setItem(row, 3, QTableWidgetItem(days_text))
+            self.reco_table.setItem(row, 4, QTableWidgetItem(f"{remaining}%"))
+            self.reco_table.setItem(row, 5, QTableWidgetItem(f"{score:.1f}"))
+            self.reco_table.setItem(row, 6, QTableWidgetItem(str(alloc)))
+
+        lines = [
+            f"وضعیت انرژی: {energy_label} (خستگی تقریبی: {fatigue:.0f}%)",
+            f"زمان مطالعه پیشنهادی امروز: حدود {total_minutes} دقیقه",
+            "",
+            "✅ مهم‌ترین کارها (بالای جدول) را حتماً امروز جلو ببر:"
+        ]
+        for score, t, days_to_due, remaining in scored[:3]:
+            alloc = int(total_minutes * (score / total_score))
+            if days_to_due <= 0:
+                due_text = "امروز / عقب‌افتاده"
+            else:
+                due_text = f"{days_to_due} روز دیگر"
+            lines.append(
+                f"- {t.title} ({t.subject}) | ددلاین: {due_text} | "
+                f"باقیمانده: {remaining}% | زمان پیشنهادی امروز: {alloc} دقیقه"
+            )
+        lines.append("")
+        lines.append("💡 پیشنهاد کلی:")
+        if fatigue < 33:
+            lines.append("با توجه به انرژی خوبت، اول کارهای سخت و نزدیک ددلاین را انجام بده، بعد سراغ مرور برو.")
+        elif fatigue < 66:
+            lines.append("بهتر است ترکیبی از کارهای مهم و متوسط انجام بدهی و بین آن‌ها استراحت کوتاه داشته باشی.")
+        else:
+            lines.append("امروز سبک‌تر کار کن؛ چند کار ضروری را جلو ببر و بقیه را به مرور یا استراحت اختصاص بده.")
+
+        self.recommendation_text.setText("\n".join(lines))
+
+    # ---------- تقویم ---------- #
+    def update_calendar_marks(self):
+        date_map = {}
+        for t in self.tasks:
+            date_map[t.due_date] = date_map.get(t.due_date, 0) + 1
+        self.jcalendar.setTaskDates(date_map)
+        self.update_calendar_tasks_for_selected_date(self.jcalendar.selectedDate())
+
+    def update_calendar_tasks_for_selected_date(self, jd: jdate):
+        self.calendar_tasks_label.setText(
+            f"تکالیف مربوط به تاریخ: {jd.year}/{jd.month:02d}/{jd.day:02d}"
+        )
+        tasks_for_day = [t for t in self.tasks if t.due_date == jd]
+        self.calendar_tasks_table.setRowCount(len(tasks_for_day))
+        for i, t in enumerate(tasks_for_day):
+            self.calendar_tasks_table.setItem(i, 0, QTableWidgetItem(t.subject))
+            self.calendar_tasks_table.setItem(i, 1, QTableWidgetItem(t.title))
+            self.calendar_tasks_table.setItem(i, 2, QTableWidgetItem(str(t.difficulty)))
+            self.calendar_tasks_table.setItem(i, 3, QTableWidgetItem(str(t.progress)))
+            self.calendar_tasks_table.setItem(i, 4, QTableWidgetItem("بله" if t.completed else "خیر"))
+            est = self.estimate_task_minutes(t)
+            self.calendar_tasks_table.setItem(i, 5, QTableWidgetItem(str(est)))
+
+    # ---------- دستیار و فوکوس ---------- #
+    def open_assistant(self):
+        try:
+            fatigue = self.calculate_fatigue()
+        except ValueError:
+            fatigue = 50
+        dlg = AssistantDialog(fatigue, [t for t in self.tasks if not t.completed], self)
+        dlg.exec()
+
+    def open_focus_mode(self):
+        dlg = FocusDialog(self)
+        dlg.exec()
+
+    # ---------- ساعت ---------- #
+    def update_clock(self):
+        now = QTime.currentTime()
+        self.clock_label.setText(now.toString("HH:mm:ss"))
+
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = StudyManager()
+    window.show()
+    sys.exit(app.exec())
